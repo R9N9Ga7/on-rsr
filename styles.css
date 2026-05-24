@@ -1,0 +1,52 @@
+.simple-srs-view {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.simple-srs-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.simple-srs-summary {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.simple-srs-list {
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.simple-srs-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  padding: 12px;
+  background: var(--background-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.simple-srs-card-title {
+  font-weight: 600;
+}
+
+.simple-srs-card-meta {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.simple-srs-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}

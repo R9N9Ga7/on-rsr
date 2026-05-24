@@ -1,0 +1,10 @@
+{
+  "id": "on-srs",
+  "name": "On-SRS",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Queues #review notes and tracks spaced repetition metadata in each note.",
+  "author": "OpenAI Codex",
+  "authorUrl": "https://openai.com",
+  "isDesktopOnly": false
+}
