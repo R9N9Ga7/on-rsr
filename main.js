@@ -27,6 +27,7 @@ var import_obsidian = require("obsidian");
 var VIEW_TYPE_SRS_QUEUE = "simple-srs-review-queue";
 var REVIEW_TAG = "#review";
 var SRS_FRONTMATTER_KEY = "srs";
+var DEFAULT_DECK = "default";
 function todayString() {
   return formatLocalDate(/* @__PURE__ */ new Date());
 }
@@ -49,6 +50,13 @@ function normalizePositiveInteger(value, fallback) {
   const rounded = Math.round(value);
   return rounded > 0 ? rounded : fallback;
 }
+function normalizeDeckName(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized.length > 0 ? normalized : null;
+}
 var ReviewQueueView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -67,6 +75,7 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
     this.render();
   }
   async render() {
+    var _a;
     const container = this.contentEl;
     container.empty();
     container.addClass("simple-srs-view");
@@ -87,28 +96,46 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
       });
       return;
     }
+    const itemsByDeck = /* @__PURE__ */ new Map();
     for (const item of items) {
-      const card = list.createDiv({ cls: "simple-srs-card" });
-      card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
-      card.createDiv({
-        text: `${item.file.path} | due ${item.srs.due} | interval ${item.srs.interval}d`,
-        cls: "simple-srs-card-meta"
+      const deckItems = (_a = itemsByDeck.get(item.srs.deck)) != null ? _a : [];
+      deckItems.push(item);
+      itemsByDeck.set(item.srs.deck, deckItems);
+    }
+    for (const [deck, deckItems] of itemsByDeck) {
+      const section = list.createEl("details", {
+        cls: "simple-srs-deck-section"
       });
-      const actions = card.createDiv({ cls: "simple-srs-actions" });
-      const openButton = actions.createEl("button", { text: "Open" });
-      openButton.addEventListener("click", async () => {
-        await this.plugin.app.workspace.getLeaf(true).openFile(item.file);
+      const header = section.createEl("summary", { cls: "simple-srs-deck-header" });
+      header.createDiv({ text: deck, cls: "simple-srs-deck-title" });
+      header.createDiv({
+        text: `${deckItems.length} note${deckItems.length === 1 ? "" : "s"} due`,
+        cls: "simple-srs-deck-count"
       });
-      const goodButton = actions.createEl("button", { text: "Good" });
-      goodButton.addEventListener("click", async () => {
-        await this.plugin.applyReviewAction(item.file, "good");
-        await this.render();
-      });
-      const repeatButton = actions.createEl("button", { text: "Repeat" });
-      repeatButton.addEventListener("click", async () => {
-        await this.plugin.applyReviewAction(item.file, "repeat");
-        await this.render();
-      });
+      const deckList = section.createDiv({ cls: "simple-srs-deck-list" });
+      for (const item of deckItems) {
+        const card = deckList.createDiv({ cls: "simple-srs-card" });
+        card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
+        card.createDiv({
+          text: `${item.file.path} | due ${item.srs.due} | interval ${item.srs.interval}d`,
+          cls: "simple-srs-card-meta"
+        });
+        const actions = card.createDiv({ cls: "simple-srs-actions" });
+        const openButton = actions.createEl("button", { text: "Open" });
+        openButton.addEventListener("click", async () => {
+          await this.plugin.app.workspace.getLeaf(true).openFile(item.file);
+        });
+        const goodButton = actions.createEl("button", { text: "Good" });
+        goodButton.addEventListener("click", async () => {
+          await this.plugin.applyReviewAction(item.file, "good");
+          await this.render();
+        });
+        const repeatButton = actions.createEl("button", { text: "Repeat" });
+        repeatButton.addEventListener("click", async () => {
+          await this.plugin.applyReviewAction(item.file, "repeat");
+          await this.render();
+        });
+      }
     }
   }
 };
@@ -253,6 +280,9 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
       }
     }
     items.sort((a, b) => {
+      if (a.srs.deck !== b.srs.deck) {
+        return a.srs.deck.localeCompare(b.srs.deck);
+      }
       if (a.srs.due !== b.srs.due) {
         return a.srs.due.localeCompare(b.srs.due);
       }
@@ -278,24 +308,51 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
     }
     return false;
   }
+  getDeckName(file) {
+    var _a, _b, _c;
+    const cache = this.app.metadataCache.getFileCache(file);
+    const inlineTags = (_b = (_a = cache == null ? void 0 : cache.tags) == null ? void 0 : _a.map((tag) => tag.tag)) != null ? _b : [];
+    for (const tag of inlineTags) {
+      if (!tag.startsWith("#deck/")) {
+        continue;
+      }
+      const inlineDeck = normalizeDeckName(tag.slice("#deck/".length));
+      if (inlineDeck) {
+        return inlineDeck;
+      }
+    }
+    const frontmatter = cache == null ? void 0 : cache.frontmatter;
+    const frontmatterDeck = normalizeDeckName(frontmatter == null ? void 0 : frontmatter.deck);
+    if (frontmatterDeck) {
+      return frontmatterDeck;
+    }
+    const srsDeck = normalizeDeckName((_c = frontmatter == null ? void 0 : frontmatter[SRS_FRONTMATTER_KEY]) == null ? void 0 : _c.deck);
+    if (srsDeck) {
+      return srsDeck;
+    }
+    return DEFAULT_DECK;
+  }
   getSrsData(file) {
     var _a;
     const frontmatter = (_a = this.app.metadataCache.getFileCache(file)) == null ? void 0 : _a.frontmatter;
     const raw = frontmatter == null ? void 0 : frontmatter[SRS_FRONTMATTER_KEY];
     const today = todayString();
+    const deck = this.getDeckName(file);
     if (!raw || typeof raw !== "object") {
       return {
         interval: 1,
         due: today,
         lastReviewed: void 0,
-        ease: 2
+        ease: 2,
+        deck
       };
     }
     const interval = normalizePositiveInteger(raw.interval, 1);
     const due = typeof raw.due === "string" ? String(raw.due) : today;
     const lastReviewed = typeof raw.lastReviewed === "string" ? String(raw.lastReviewed) : void 0;
     const ease = normalizePositiveInteger(raw.ease, 2);
-    return { interval, due, lastReviewed, ease };
+    const storedDeck = normalizeDeckName(raw.deck);
+    return { interval, due, lastReviewed, ease, deck: storedDeck != null ? storedDeck : deck };
   }
   async applyReviewAction(file, action) {
     if (!this.isReviewNote(file)) {
@@ -311,6 +368,7 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
       srsSection.due = next.due;
       srsSection.lastReviewed = next.lastReviewed;
       srsSection.ease = next.ease;
+      srsSection.deck = this.getDeckName(file);
       frontmatter[SRS_FRONTMATTER_KEY] = srsSection;
     });
     await this.refreshQueue();
@@ -322,6 +380,7 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
     var _a;
     if (action === "repeat") {
       return {
+        deck: current.deck,
         interval: 1,
         due: addDays(today, 1),
         lastReviewed: today,
@@ -331,6 +390,7 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
     const nextInterval = Math.max(2, current.interval * 2);
     const nextEase = Math.min(((_a = current.ease) != null ? _a : 2) + 1, 10);
     return {
+      deck: current.deck,
       interval: nextInterval,
       due: addDays(today, nextInterval),
       lastReviewed: today,

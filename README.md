@@ -7,6 +7,7 @@ It looks for notes that contain the `#review` tag, adds due notes to a review qu
 ## What the plugin does
 
 - Finds markdown notes that contain `#review`
+- Resolves each review note into a deck
 - Creates a queue of notes that are due today or overdue
 - Shows that queue in a dedicated review view
 - Adds quick actions for `Good` and `Repeat tomorrow`
@@ -49,6 +50,36 @@ tags:
 ---
 ```
 
+## How to assign a deck
+
+Every review note belongs to a deck.
+
+- If a note has no deck marker, it is placed in the `default` deck
+- You can assign a deck with an inline tag like `#deck/math`
+- You can assign a deck with frontmatter like `deck: math`
+- The plugin also reads `srs.deck` if you already store deck data there
+
+Example with an inline deck tag:
+
+```md
+# Newton's Laws
+
+#review
+#deck/physics
+
+Force equals mass times acceleration.
+```
+
+Example with frontmatter:
+
+```yaml
+---
+tags:
+  - review
+deck: physics
+---
+```
+
 ## How to open the review queue
 
 You can open the review queue in three ways:
@@ -66,6 +97,7 @@ Only notes with `#review` are considered.
 When the plugin sees a review note:
 
 - If the note has no SRS data yet, it is treated as due today
+- If the note has no deck marker, it is treated as part of the `default` deck
 - If the note has a `due` date that is today or earlier, it appears in the queue
 - If the note is scheduled for a future date, it stays out of the queue until that date
 
@@ -123,6 +155,7 @@ Example:
 ```yaml
 ---
 srs:
+  deck: physics
   interval: 4
   due: 2026-05-21
   lastReviewed: 2026-05-17
@@ -136,6 +169,7 @@ srs:
 - `due`: next review date in `YYYY-MM-DD` format
 - `lastReviewed`: last date when you pressed `Good` or `Repeat tomorrow`
 - `ease`: extra value stored by the plugin for future scheduling logic
+- `deck`: deck name resolved from `#deck/<name>`, `deck: <name>`, or `default`
 
 You do not need to create this metadata manually. The plugin creates and updates it automatically.
 

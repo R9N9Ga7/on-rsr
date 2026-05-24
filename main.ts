@@ -11,6 +11,7 @@ import {
 const VIEW_TYPE_SRS_QUEUE = "simple-srs-review-queue";
 const REVIEW_TAG = "#review";
 const SRS_FRONTMATTER_KEY = "srs";
+const DEFAULT_DECK = "default";
 
 type ReviewAction = "good" | "repeat";
 
@@ -19,6 +20,7 @@ interface SrsData {
 	due: string;
 	lastReviewed?: string;
 	ease?: number;
+	deck: string;
 }
 
 interface ReviewQueueItem {
@@ -51,6 +53,15 @@ function normalizePositiveInteger(value: unknown, fallback: number): number {
 
 	const rounded = Math.round(value);
 	return rounded > 0 ? rounded : fallback;
+}
+
+function normalizeDeckName(value: unknown): string | null {
+	if (typeof value !== "string") {
+		return null;
+	}
+
+	const normalized = value.trim().toLowerCase();
+	return normalized.length > 0 ? normalized : null;
 }
 
 class ReviewQueueView extends ItemView {
@@ -102,32 +113,52 @@ class ReviewQueueView extends ItemView {
 			return;
 		}
 
+		const itemsByDeck = new Map<string, ReviewQueueItem[]>();
 		for (const item of items) {
-			const card = list.createDiv({ cls: "simple-srs-card" });
-			card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
-			card.createDiv({
-				text: `${item.file.path} | due ${item.srs.due} | interval ${item.srs.interval}d`,
-				cls: "simple-srs-card-meta",
+			const deckItems = itemsByDeck.get(item.srs.deck) ?? [];
+			deckItems.push(item);
+			itemsByDeck.set(item.srs.deck, deckItems);
+		}
+
+		for (const [deck, deckItems] of itemsByDeck) {
+			const section = list.createEl("details", {
+				cls: "simple-srs-deck-section",
+			});
+			const header = section.createEl("summary", { cls: "simple-srs-deck-header" });
+			header.createDiv({ text: deck, cls: "simple-srs-deck-title" });
+			header.createDiv({
+				text: `${deckItems.length} note${deckItems.length === 1 ? "" : "s"} due`,
+				cls: "simple-srs-deck-count",
 			});
 
-			const actions = card.createDiv({ cls: "simple-srs-actions" });
+			const deckList = section.createDiv({ cls: "simple-srs-deck-list" });
+			for (const item of deckItems) {
+				const card = deckList.createDiv({ cls: "simple-srs-card" });
+				card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
+				card.createDiv({
+					text: `${item.file.path} | due ${item.srs.due} | interval ${item.srs.interval}d`,
+					cls: "simple-srs-card-meta",
+				});
 
-			const openButton = actions.createEl("button", { text: "Open" });
-			openButton.addEventListener("click", async () => {
-				await this.plugin.app.workspace.getLeaf(true).openFile(item.file);
-			});
+				const actions = card.createDiv({ cls: "simple-srs-actions" });
 
-			const goodButton = actions.createEl("button", { text: "Good" });
-			goodButton.addEventListener("click", async () => {
-				await this.plugin.applyReviewAction(item.file, "good");
-				await this.render();
-			});
+				const openButton = actions.createEl("button", { text: "Open" });
+				openButton.addEventListener("click", async () => {
+					await this.plugin.app.workspace.getLeaf(true).openFile(item.file);
+				});
 
-			const repeatButton = actions.createEl("button", { text: "Repeat" });
-			repeatButton.addEventListener("click", async () => {
-				await this.plugin.applyReviewAction(item.file, "repeat");
-				await this.render();
-			});
+				const goodButton = actions.createEl("button", { text: "Good" });
+				goodButton.addEventListener("click", async () => {
+					await this.plugin.applyReviewAction(item.file, "good");
+					await this.render();
+				});
+
+				const repeatButton = actions.createEl("button", { text: "Repeat" });
+				repeatButton.addEventListener("click", async () => {
+					await this.plugin.applyReviewAction(item.file, "repeat");
+					await this.render();
+				});
+			}
 		}
 	}
 }
@@ -304,6 +335,9 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 		}
 
 		items.sort((a, b) => {
+			if (a.srs.deck !== b.srs.deck) {
+				return a.srs.deck.localeCompare(b.srs.deck);
+			}
 			if (a.srs.due !== b.srs.due) {
 				return a.srs.due.localeCompare(b.srs.due);
 			}
@@ -334,10 +368,40 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 		return false;
 	}
 
+	getDeckName(file: TFile): string {
+		const cache = this.app.metadataCache.getFileCache(file);
+		const inlineTags = cache?.tags?.map((tag) => tag.tag) ?? [];
+
+		for (const tag of inlineTags) {
+			if (!tag.startsWith("#deck/")) {
+				continue;
+			}
+
+			const inlineDeck = normalizeDeckName(tag.slice("#deck/".length));
+			if (inlineDeck) {
+				return inlineDeck;
+			}
+		}
+
+		const frontmatter = cache?.frontmatter;
+		const frontmatterDeck = normalizeDeckName(frontmatter?.deck);
+		if (frontmatterDeck) {
+			return frontmatterDeck;
+		}
+
+		const srsDeck = normalizeDeckName(frontmatter?.[SRS_FRONTMATTER_KEY]?.deck);
+		if (srsDeck) {
+			return srsDeck;
+		}
+
+		return DEFAULT_DECK;
+	}
+
 	getSrsData(file: TFile): SrsData {
 		const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
 		const raw = frontmatter?.[SRS_FRONTMATTER_KEY];
 		const today = todayString();
+		const deck = this.getDeckName(file);
 
 		if (!raw || typeof raw !== "object") {
 			return {
@@ -345,6 +409,7 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 				due: today,
 				lastReviewed: undefined,
 				ease: 2,
+				deck,
 			};
 		}
 
@@ -356,8 +421,9 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 			? String((raw as Record<string, unknown>).lastReviewed)
 			: undefined;
 		const ease = normalizePositiveInteger((raw as Record<string, unknown>).ease, 2);
+		const storedDeck = normalizeDeckName((raw as Record<string, unknown>).deck);
 
-		return { interval, due, lastReviewed, ease };
+		return { interval, due, lastReviewed, ease, deck: storedDeck ?? deck };
 	}
 
 	async applyReviewAction(file: TFile, action: ReviewAction): Promise<void> {
@@ -380,6 +446,7 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 			srsSection.due = next.due;
 			srsSection.lastReviewed = next.lastReviewed;
 			srsSection.ease = next.ease;
+			srsSection.deck = this.getDeckName(file);
 			frontmatter[SRS_FRONTMATTER_KEY] = srsSection;
 		});
 
@@ -394,6 +461,7 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 	getNextSrsData(current: SrsData, action: ReviewAction, today: string): SrsData {
 		if (action === "repeat") {
 			return {
+				deck: current.deck,
 				interval: 1,
 				due: addDays(today, 1),
 				lastReviewed: today,
@@ -404,6 +472,7 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 		const nextInterval = Math.max(2, current.interval * 2);
 		const nextEase = Math.min((current.ease ?? 2) + 1, 10);
 		return {
+			deck: current.deck,
 			interval: nextInterval,
 			due: addDays(today, nextInterval),
 			lastReviewed: today,
