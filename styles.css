@@ -42,6 +42,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   padding: 12px 14px;
   cursor: pointer;
@@ -80,6 +81,21 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
   text-align: right;
+}
+
+.simple-srs-deck-switcher {
+  display: flex;
+  gap: 4px;
+}
+
+.simple-srs-deck-switcher button {
+  padding: 2px 8px;
+  font-size: var(--font-ui-smaller);
+}
+
+.simple-srs-deck-switcher button.is-active {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
 }
 
 .simple-srs-deck-list {

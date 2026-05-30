@@ -63,6 +63,7 @@ function formatNoteCount(count, suffix = "") {
 var ReviewQueueView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
+    this.deckNoteModes = /* @__PURE__ */ new Map();
     this.plugin = plugin;
   }
   getViewType() {
@@ -77,8 +78,12 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
   async onOpen() {
     this.render();
   }
+  getDeckNoteMode(deck) {
+    var _a;
+    return (_a = this.deckNoteModes.get(deck)) != null ? _a : "queued";
+  }
   async render() {
-    var _a, _b;
+    var _a, _b, _c, _d;
     const container = this.contentEl;
     container.empty();
     container.addClass("simple-srs-view");
@@ -89,9 +94,9 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
       await this.render();
     });
     const summary = container.createDiv({ cls: "simple-srs-summary" });
-    const items = this.plugin.reviewQueue;
+    const queuedItems = this.plugin.reviewQueue;
     summary.setText(
-      `${formatNoteCount(this.plugin.totalReviewNoteCount)} in all decks | ${formatNoteCount(items.length, " due")}`
+      `${formatNoteCount(this.plugin.totalReviewNoteCount)} in all decks | ${formatNoteCount(queuedItems.length, " queued")} | ${formatNoteCount(this.plugin.reviewedNoteCount, " reviewed")}`
     );
     const list = container.createDiv({ cls: "simple-srs-list" });
     if (this.plugin.deckStats.size === 0) {
@@ -101,14 +106,23 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
       });
       return;
     }
-    const itemsByDeck = /* @__PURE__ */ new Map();
-    for (const item of items) {
-      const deckItems = (_a = itemsByDeck.get(item.srs.deck)) != null ? _a : [];
+    const queuedItemsByDeck = /* @__PURE__ */ new Map();
+    for (const item of queuedItems) {
+      const deckItems = (_a = queuedItemsByDeck.get(item.srs.deck)) != null ? _a : [];
       deckItems.push(item);
-      itemsByDeck.set(item.srs.deck, deckItems);
+      queuedItemsByDeck.set(item.srs.deck, deckItems);
+    }
+    const reviewedItemsByDeck = /* @__PURE__ */ new Map();
+    for (const item of this.plugin.reviewedNotes) {
+      const deckItems = (_b = reviewedItemsByDeck.get(item.srs.deck)) != null ? _b : [];
+      deckItems.push(item);
+      reviewedItemsByDeck.set(item.srs.deck, deckItems);
     }
     for (const [deck, stats] of this.plugin.deckStats) {
-      const deckItems = (_b = itemsByDeck.get(deck)) != null ? _b : [];
+      const mode = this.getDeckNoteMode(deck);
+      const queuedDeckItems = (_c = queuedItemsByDeck.get(deck)) != null ? _c : [];
+      const reviewedDeckItems = (_d = reviewedItemsByDeck.get(deck)) != null ? _d : [];
+      const deckItems = mode === "queued" ? queuedDeckItems : reviewedDeckItems;
       const section = list.createEl("details", {
         cls: "simple-srs-deck-section"
       });
@@ -116,13 +130,27 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
       const header = section.createEl("summary", { cls: "simple-srs-deck-header" });
       header.createDiv({ text: deck, cls: "simple-srs-deck-title" });
       header.createDiv({
-        text: `${formatNoteCount(stats.total)} total | ${formatNoteCount(deckItems.length, " due")}`,
+        text: `${formatNoteCount(stats.total)} total | ${formatNoteCount(stats.queued, " queued")} | ${formatNoteCount(stats.reviewed, " reviewed")}`,
         cls: "simple-srs-deck-count"
       });
+      const switcher = header.createDiv({ cls: "simple-srs-deck-switcher" });
+      for (const option of ["queued", "reviewed"]) {
+        const button = switcher.createEl("button", {
+          text: `${option === "queued" ? "Queued" : "Reviewed"} (${option === "queued" ? stats.queued : stats.reviewed})`,
+          cls: option === mode ? "is-active" : ""
+        });
+        button.setAttribute("aria-pressed", String(option === mode));
+        button.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          this.deckNoteModes.set(deck, option);
+          await this.render();
+        });
+      }
       const deckList = section.createDiv({ cls: "simple-srs-deck-list" });
       if (deckItems.length === 0) {
         deckList.createDiv({
-          text: "No notes are due in this deck.",
+          text: mode === "queued" ? "No queued notes in this deck." : "No reviewed notes in this deck.",
           cls: "simple-srs-summary"
         });
         continue;
@@ -139,6 +167,9 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
         openButton.addEventListener("click", async () => {
           await this.plugin.app.workspace.getLeaf(true).openFile(item.file);
         });
+        if (mode === "reviewed") {
+          continue;
+        }
         const goodButton = actions.createEl("button", { text: "Good" });
         goodButton.addEventListener("click", async () => {
           await this.plugin.applyReviewAction(item.file, "good");
@@ -157,8 +188,10 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.reviewQueue = [];
+    this.reviewedNotes = [];
     this.deckStats = /* @__PURE__ */ new Map();
     this.totalReviewNoteCount = 0;
+    this.reviewedNoteCount = 0;
   }
   async onload() {
     this.registerView(
@@ -287,6 +320,7 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
     const files = this.app.vault.getMarkdownFiles();
     const dueToday = todayString();
     const items = [];
+    const reviewedNotes = [];
     const deckStats = /* @__PURE__ */ new Map();
     let totalReviewNoteCount = 0;
     for (const file of files) {
@@ -294,15 +328,32 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
         continue;
       }
       const srs = this.getSrsData(file);
-      const stats = (_a = deckStats.get(srs.deck)) != null ? _a : { total: 0 };
+      const stats = (_a = deckStats.get(srs.deck)) != null ? _a : {
+        total: 0,
+        queued: 0,
+        reviewed: 0
+      };
       stats.total += 1;
       deckStats.set(srs.deck, stats);
       totalReviewNoteCount += 1;
       if (srs.due <= dueToday) {
+        stats.queued += 1;
         items.push({ file, srs });
+      } else {
+        stats.reviewed += 1;
+        reviewedNotes.push({ file, srs });
       }
     }
     items.sort((a, b) => {
+      if (a.srs.deck !== b.srs.deck) {
+        return a.srs.deck.localeCompare(b.srs.deck);
+      }
+      if (a.srs.due !== b.srs.due) {
+        return a.srs.due.localeCompare(b.srs.due);
+      }
+      return a.file.path.localeCompare(b.file.path);
+    });
+    reviewedNotes.sort((a, b) => {
       if (a.srs.deck !== b.srs.deck) {
         return a.srs.deck.localeCompare(b.srs.deck);
       }
@@ -317,7 +368,9 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
       )
     );
     this.totalReviewNoteCount = totalReviewNoteCount;
+    this.reviewedNoteCount = reviewedNotes.length;
     this.reviewQueue = items;
+    this.reviewedNotes = reviewedNotes;
     await this.rerenderQueueView();
   }
   isReviewNote(file) {

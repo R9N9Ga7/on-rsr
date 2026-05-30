@@ -14,6 +14,7 @@ const SRS_FRONTMATTER_KEY = "srs";
 const DEFAULT_DECK = "default";
 
 type ReviewAction = "good" | "repeat";
+type DeckNoteMode = "queued" | "reviewed";
 
 interface SrsData {
 	interval: number;
@@ -30,6 +31,8 @@ interface ReviewQueueItem {
 
 interface DeckStats {
 	total: number;
+	queued: number;
+	reviewed: number;
 }
 
 function todayString(): string {
@@ -74,6 +77,7 @@ function formatNoteCount(count: number, suffix = ""): string {
 
 class ReviewQueueView extends ItemView {
 	plugin: SimpleSrsReviewPlugin;
+	deckNoteModes = new Map<string, DeckNoteMode>();
 
 	constructor(leaf: WorkspaceLeaf, plugin: SimpleSrsReviewPlugin) {
 		super(leaf);
@@ -96,6 +100,10 @@ class ReviewQueueView extends ItemView {
 		this.render();
 	}
 
+	getDeckNoteMode(deck: string): DeckNoteMode {
+		return this.deckNoteModes.get(deck) ?? "queued";
+	}
+
 	async render(): Promise<void> {
 		const container = this.contentEl;
 		container.empty();
@@ -109,9 +117,9 @@ class ReviewQueueView extends ItemView {
 		});
 
 		const summary = container.createDiv({ cls: "simple-srs-summary" });
-		const items = this.plugin.reviewQueue;
+		const queuedItems = this.plugin.reviewQueue;
 		summary.setText(
-			`${formatNoteCount(this.plugin.totalReviewNoteCount)} in all decks | ${formatNoteCount(items.length, " due")}`,
+			`${formatNoteCount(this.plugin.totalReviewNoteCount)} in all decks | ${formatNoteCount(queuedItems.length, " queued")} | ${formatNoteCount(this.plugin.reviewedNoteCount, " reviewed")}`,
 		);
 
 		const list = container.createDiv({ cls: "simple-srs-list" });
@@ -123,15 +131,25 @@ class ReviewQueueView extends ItemView {
 			return;
 		}
 
-		const itemsByDeck = new Map<string, ReviewQueueItem[]>();
-		for (const item of items) {
-			const deckItems = itemsByDeck.get(item.srs.deck) ?? [];
+		const queuedItemsByDeck = new Map<string, ReviewQueueItem[]>();
+		for (const item of queuedItems) {
+			const deckItems = queuedItemsByDeck.get(item.srs.deck) ?? [];
 			deckItems.push(item);
-			itemsByDeck.set(item.srs.deck, deckItems);
+			queuedItemsByDeck.set(item.srs.deck, deckItems);
+		}
+
+		const reviewedItemsByDeck = new Map<string, ReviewQueueItem[]>();
+		for (const item of this.plugin.reviewedNotes) {
+			const deckItems = reviewedItemsByDeck.get(item.srs.deck) ?? [];
+			deckItems.push(item);
+			reviewedItemsByDeck.set(item.srs.deck, deckItems);
 		}
 
 		for (const [deck, stats] of this.plugin.deckStats) {
-			const deckItems = itemsByDeck.get(deck) ?? [];
+			const mode = this.getDeckNoteMode(deck);
+			const queuedDeckItems = queuedItemsByDeck.get(deck) ?? [];
+			const reviewedDeckItems = reviewedItemsByDeck.get(deck) ?? [];
+			const deckItems = mode === "queued" ? queuedDeckItems : reviewedDeckItems;
 			const section = list.createEl("details", {
 				cls: "simple-srs-deck-section",
 			});
@@ -139,14 +157,31 @@ class ReviewQueueView extends ItemView {
 			const header = section.createEl("summary", { cls: "simple-srs-deck-header" });
 			header.createDiv({ text: deck, cls: "simple-srs-deck-title" });
 			header.createDiv({
-				text: `${formatNoteCount(stats.total)} total | ${formatNoteCount(deckItems.length, " due")}`,
+				text: `${formatNoteCount(stats.total)} total | ${formatNoteCount(stats.queued, " queued")} | ${formatNoteCount(stats.reviewed, " reviewed")}`,
 				cls: "simple-srs-deck-count",
 			});
+
+			const switcher = header.createDiv({ cls: "simple-srs-deck-switcher" });
+			for (const option of ["queued", "reviewed"] as const) {
+				const button = switcher.createEl("button", {
+					text: `${option === "queued" ? "Queued" : "Reviewed"} (${option === "queued" ? stats.queued : stats.reviewed})`,
+					cls: option === mode ? "is-active" : "",
+				});
+				button.setAttribute("aria-pressed", String(option === mode));
+				button.addEventListener("click", async (event) => {
+					event.preventDefault();
+					event.stopPropagation();
+					this.deckNoteModes.set(deck, option);
+					await this.render();
+				});
+			}
 
 			const deckList = section.createDiv({ cls: "simple-srs-deck-list" });
 			if (deckItems.length === 0) {
 				deckList.createDiv({
-					text: "No notes are due in this deck.",
+					text: mode === "queued"
+						? "No queued notes in this deck."
+						: "No reviewed notes in this deck.",
 					cls: "simple-srs-summary",
 				});
 				continue;
@@ -167,6 +202,10 @@ class ReviewQueueView extends ItemView {
 					await this.plugin.app.workspace.getLeaf(true).openFile(item.file);
 				});
 
+				if (mode === "reviewed") {
+					continue;
+				}
+
 				const goodButton = actions.createEl("button", { text: "Good" });
 				goodButton.addEventListener("click", async () => {
 					await this.plugin.applyReviewAction(item.file, "good");
@@ -185,8 +224,10 @@ class ReviewQueueView extends ItemView {
 
 export default class SimpleSrsReviewPlugin extends Plugin {
 	reviewQueue: ReviewQueueItem[] = [];
+	reviewedNotes: ReviewQueueItem[] = [];
 	deckStats = new Map<string, DeckStats>();
 	totalReviewNoteCount = 0;
+	reviewedNoteCount = 0;
 
 	async onload(): Promise<void> {
 		this.registerView(
@@ -344,6 +385,7 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 		const files = this.app.vault.getMarkdownFiles();
 		const dueToday = todayString();
 		const items: ReviewQueueItem[] = [];
+		const reviewedNotes: ReviewQueueItem[] = [];
 		const deckStats = new Map<string, DeckStats>();
 		let totalReviewNoteCount = 0;
 
@@ -353,17 +395,35 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 			}
 
 			const srs = this.getSrsData(file);
-			const stats = deckStats.get(srs.deck) ?? { total: 0 };
+			const stats = deckStats.get(srs.deck) ?? {
+				total: 0,
+				queued: 0,
+				reviewed: 0,
+			};
 			stats.total += 1;
 			deckStats.set(srs.deck, stats);
 			totalReviewNoteCount += 1;
 
 			if (srs.due <= dueToday) {
+				stats.queued += 1;
 				items.push({ file, srs });
+			} else {
+				stats.reviewed += 1;
+				reviewedNotes.push({ file, srs });
 			}
 		}
 
 		items.sort((a, b) => {
+			if (a.srs.deck !== b.srs.deck) {
+				return a.srs.deck.localeCompare(b.srs.deck);
+			}
+			if (a.srs.due !== b.srs.due) {
+				return a.srs.due.localeCompare(b.srs.due);
+			}
+			return a.file.path.localeCompare(b.file.path);
+		});
+
+		reviewedNotes.sort((a, b) => {
 			if (a.srs.deck !== b.srs.deck) {
 				return a.srs.deck.localeCompare(b.srs.deck);
 			}
@@ -379,7 +439,9 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 			),
 		);
 		this.totalReviewNoteCount = totalReviewNoteCount;
+		this.reviewedNoteCount = reviewedNotes.length;
 		this.reviewQueue = items;
+		this.reviewedNotes = reviewedNotes;
 		await this.rerenderQueueView();
 	}
 
