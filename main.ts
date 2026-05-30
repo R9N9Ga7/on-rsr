@@ -28,6 +28,10 @@ interface ReviewQueueItem {
 	srs: SrsData;
 }
 
+interface DeckStats {
+	total: number;
+}
+
 function todayString(): string {
 	return formatLocalDate(new Date());
 }
@@ -62,6 +66,10 @@ function normalizeDeckName(value: unknown): string | null {
 
 	const normalized = value.trim().toLowerCase();
 	return normalized.length > 0 ? normalized : null;
+}
+
+function formatNoteCount(count: number, suffix = ""): string {
+	return `${count} note${count === 1 ? "" : "s"}${suffix}`;
 }
 
 class ReviewQueueView extends ItemView {
@@ -102,12 +110,14 @@ class ReviewQueueView extends ItemView {
 
 		const summary = container.createDiv({ cls: "simple-srs-summary" });
 		const items = this.plugin.reviewQueue;
-		summary.setText(`${items.length} note${items.length === 1 ? "" : "s"} due`);
+		summary.setText(
+			`${formatNoteCount(this.plugin.totalReviewNoteCount)} in all decks | ${formatNoteCount(items.length, " due")}`,
+		);
 
 		const list = container.createDiv({ cls: "simple-srs-list" });
-		if (items.length === 0) {
+		if (this.plugin.deckStats.size === 0) {
 			list.createDiv({
-				text: "No review notes are due right now.",
+				text: "No review notes found.",
 				cls: "simple-srs-summary",
 			});
 			return;
@@ -120,18 +130,28 @@ class ReviewQueueView extends ItemView {
 			itemsByDeck.set(item.srs.deck, deckItems);
 		}
 
-		for (const [deck, deckItems] of itemsByDeck) {
+		for (const [deck, stats] of this.plugin.deckStats) {
+			const deckItems = itemsByDeck.get(deck) ?? [];
 			const section = list.createEl("details", {
 				cls: "simple-srs-deck-section",
 			});
+			section.open = deckItems.length > 0;
 			const header = section.createEl("summary", { cls: "simple-srs-deck-header" });
 			header.createDiv({ text: deck, cls: "simple-srs-deck-title" });
 			header.createDiv({
-				text: `${deckItems.length} note${deckItems.length === 1 ? "" : "s"} due`,
+				text: `${formatNoteCount(stats.total)} total | ${formatNoteCount(deckItems.length, " due")}`,
 				cls: "simple-srs-deck-count",
 			});
 
 			const deckList = section.createDiv({ cls: "simple-srs-deck-list" });
+			if (deckItems.length === 0) {
+				deckList.createDiv({
+					text: "No notes are due in this deck.",
+					cls: "simple-srs-summary",
+				});
+				continue;
+			}
+
 			for (const item of deckItems) {
 				const card = deckList.createDiv({ cls: "simple-srs-card" });
 				card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
@@ -165,6 +185,8 @@ class ReviewQueueView extends ItemView {
 
 export default class SimpleSrsReviewPlugin extends Plugin {
 	reviewQueue: ReviewQueueItem[] = [];
+	deckStats = new Map<string, DeckStats>();
+	totalReviewNoteCount = 0;
 
 	async onload(): Promise<void> {
 		this.registerView(
@@ -322,6 +344,8 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 		const files = this.app.vault.getMarkdownFiles();
 		const dueToday = todayString();
 		const items: ReviewQueueItem[] = [];
+		const deckStats = new Map<string, DeckStats>();
+		let totalReviewNoteCount = 0;
 
 		for (const file of files) {
 			if (!this.isReviewNote(file)) {
@@ -329,6 +353,11 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 			}
 
 			const srs = this.getSrsData(file);
+			const stats = deckStats.get(srs.deck) ?? { total: 0 };
+			stats.total += 1;
+			deckStats.set(srs.deck, stats);
+			totalReviewNoteCount += 1;
+
 			if (srs.due <= dueToday) {
 				items.push({ file, srs });
 			}
@@ -344,6 +373,12 @@ export default class SimpleSrsReviewPlugin extends Plugin {
 			return a.file.path.localeCompare(b.file.path);
 		});
 
+		this.deckStats = new Map(
+			Array.from(deckStats.entries()).sort(([deckA], [deckB]) =>
+				deckA.localeCompare(deckB),
+			),
+		);
+		this.totalReviewNoteCount = totalReviewNoteCount;
 		this.reviewQueue = items;
 		await this.rerenderQueueView();
 	}

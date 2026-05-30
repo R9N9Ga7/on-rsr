@@ -57,6 +57,9 @@ function normalizeDeckName(value) {
   const normalized = value.trim().toLowerCase();
   return normalized.length > 0 ? normalized : null;
 }
+function formatNoteCount(count, suffix = "") {
+  return `${count} note${count === 1 ? "" : "s"}${suffix}`;
+}
 var ReviewQueueView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
@@ -75,7 +78,7 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
     this.render();
   }
   async render() {
-    var _a;
+    var _a, _b;
     const container = this.contentEl;
     container.empty();
     container.addClass("simple-srs-view");
@@ -87,11 +90,13 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
     });
     const summary = container.createDiv({ cls: "simple-srs-summary" });
     const items = this.plugin.reviewQueue;
-    summary.setText(`${items.length} note${items.length === 1 ? "" : "s"} due`);
+    summary.setText(
+      `${formatNoteCount(this.plugin.totalReviewNoteCount)} in all decks | ${formatNoteCount(items.length, " due")}`
+    );
     const list = container.createDiv({ cls: "simple-srs-list" });
-    if (items.length === 0) {
+    if (this.plugin.deckStats.size === 0) {
       list.createDiv({
-        text: "No review notes are due right now.",
+        text: "No review notes found.",
         cls: "simple-srs-summary"
       });
       return;
@@ -102,17 +107,26 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
       deckItems.push(item);
       itemsByDeck.set(item.srs.deck, deckItems);
     }
-    for (const [deck, deckItems] of itemsByDeck) {
+    for (const [deck, stats] of this.plugin.deckStats) {
+      const deckItems = (_b = itemsByDeck.get(deck)) != null ? _b : [];
       const section = list.createEl("details", {
         cls: "simple-srs-deck-section"
       });
+      section.open = deckItems.length > 0;
       const header = section.createEl("summary", { cls: "simple-srs-deck-header" });
       header.createDiv({ text: deck, cls: "simple-srs-deck-title" });
       header.createDiv({
-        text: `${deckItems.length} note${deckItems.length === 1 ? "" : "s"} due`,
+        text: `${formatNoteCount(stats.total)} total | ${formatNoteCount(deckItems.length, " due")}`,
         cls: "simple-srs-deck-count"
       });
       const deckList = section.createDiv({ cls: "simple-srs-deck-list" });
+      if (deckItems.length === 0) {
+        deckList.createDiv({
+          text: "No notes are due in this deck.",
+          cls: "simple-srs-summary"
+        });
+        continue;
+      }
       for (const item of deckItems) {
         const card = deckList.createDiv({ cls: "simple-srs-card" });
         card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
@@ -143,6 +157,8 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.reviewQueue = [];
+    this.deckStats = /* @__PURE__ */ new Map();
+    this.totalReviewNoteCount = 0;
   }
   async onload() {
     this.registerView(
@@ -267,14 +283,21 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
     this.app.workspace.revealLeaf(leaf);
   }
   async refreshQueue() {
+    var _a;
     const files = this.app.vault.getMarkdownFiles();
     const dueToday = todayString();
     const items = [];
+    const deckStats = /* @__PURE__ */ new Map();
+    let totalReviewNoteCount = 0;
     for (const file of files) {
       if (!this.isReviewNote(file)) {
         continue;
       }
       const srs = this.getSrsData(file);
+      const stats = (_a = deckStats.get(srs.deck)) != null ? _a : { total: 0 };
+      stats.total += 1;
+      deckStats.set(srs.deck, stats);
+      totalReviewNoteCount += 1;
       if (srs.due <= dueToday) {
         items.push({ file, srs });
       }
@@ -288,6 +311,12 @@ var SimpleSrsReviewPlugin = class extends import_obsidian.Plugin {
       }
       return a.file.path.localeCompare(b.file.path);
     });
+    this.deckStats = new Map(
+      Array.from(deckStats.entries()).sort(
+        ([deckA], [deckB]) => deckA.localeCompare(deckB)
+      )
+    );
+    this.totalReviewNoteCount = totalReviewNoteCount;
     this.reviewQueue = items;
     await this.rerenderQueueView();
   }
