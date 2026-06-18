@@ -15,6 +15,14 @@
   flex-wrap: wrap;
 }
 
+.simple-srs-sort-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
 .simple-srs-summary {
   color: var(--text-muted);
   font-size: var(--font-ui-small);

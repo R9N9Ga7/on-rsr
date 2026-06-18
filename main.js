@@ -64,6 +64,8 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.deckNoteModes = /* @__PURE__ */ new Map();
+    this.deckSortMode = "due";
+    this.sortDirection = "ascending";
     this.plugin = plugin;
   }
   getViewType() {
@@ -82,6 +84,22 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
     var _a;
     return (_a = this.deckNoteModes.get(deck)) != null ? _a : "queued";
   }
+  sortDeckItems(items) {
+    return [...items].sort((a, b) => {
+      let comparison = 0;
+      if (this.deckSortMode === "added") {
+        comparison = a.file.stat.ctime - b.file.stat.ctime;
+      } else if (this.deckSortMode === "interval") {
+        comparison = a.srs.interval - b.srs.interval;
+      } else {
+        comparison = a.srs.due.localeCompare(b.srs.due);
+      }
+      if (comparison !== 0) {
+        return this.sortDirection === "ascending" ? comparison : -comparison;
+      }
+      return a.file.path.localeCompare(b.file.path);
+    });
+  }
   async render() {
     var _a, _b, _c, _d;
     const container = this.contentEl;
@@ -91,6 +109,37 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
     const refreshButton = toolbar.createEl("button", { text: "Refresh queue" });
     refreshButton.addEventListener("click", async () => {
       await this.plugin.refreshQueue();
+      await this.render();
+    });
+    const sortControl = toolbar.createEl("label", { cls: "simple-srs-sort-control" });
+    sortControl.createSpan({ text: "Sort by" });
+    const sortSelect = sortControl.createEl("select", {
+      attr: { "aria-label": "Sort deck notes" }
+    });
+    for (const [value, label] of [
+      ["added", "Added date"],
+      ["due", "Due date"],
+      ["interval", "Interval"]
+    ]) {
+      const option = sortSelect.createEl("option", { text: label, value });
+      option.selected = value === this.deckSortMode;
+    }
+    sortSelect.addEventListener("change", async () => {
+      this.deckSortMode = sortSelect.value;
+      await this.render();
+    });
+    const directionSelect = sortControl.createEl("select", {
+      attr: { "aria-label": "Sort direction" }
+    });
+    for (const direction of ["ascending", "descending"]) {
+      const option = directionSelect.createEl("option", {
+        text: direction === "ascending" ? "Ascending" : "Descending",
+        value: direction
+      });
+      option.selected = direction === this.sortDirection;
+    }
+    directionSelect.addEventListener("change", async () => {
+      this.sortDirection = directionSelect.value;
       await this.render();
     });
     const summary = container.createDiv({ cls: "simple-srs-summary" });
@@ -122,7 +171,9 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
       const mode = this.getDeckNoteMode(deck);
       const queuedDeckItems = (_c = queuedItemsByDeck.get(deck)) != null ? _c : [];
       const reviewedDeckItems = (_d = reviewedItemsByDeck.get(deck)) != null ? _d : [];
-      const deckItems = mode === "queued" ? queuedDeckItems : reviewedDeckItems;
+      const deckItems = this.sortDeckItems(
+        mode === "queued" ? queuedDeckItems : reviewedDeckItems
+      );
       const section = list.createEl("details", {
         cls: "simple-srs-deck-section"
       });

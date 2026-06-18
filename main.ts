@@ -15,6 +15,8 @@ const DEFAULT_DECK = "default";
 
 type ReviewAction = "good" | "repeat";
 type DeckNoteMode = "queued" | "reviewed";
+type DeckSortMode = "added" | "due" | "interval";
+type SortDirection = "ascending" | "descending";
 
 interface SrsData {
 	interval: number;
@@ -78,6 +80,8 @@ function formatNoteCount(count: number, suffix = ""): string {
 class ReviewQueueView extends ItemView {
 	plugin: SimpleSrsReviewPlugin;
 	deckNoteModes = new Map<string, DeckNoteMode>();
+	deckSortMode: DeckSortMode = "due";
+	sortDirection: SortDirection = "ascending";
 
 	constructor(leaf: WorkspaceLeaf, plugin: SimpleSrsReviewPlugin) {
 		super(leaf);
@@ -104,6 +108,25 @@ class ReviewQueueView extends ItemView {
 		return this.deckNoteModes.get(deck) ?? "queued";
 	}
 
+	sortDeckItems(items: ReviewQueueItem[]): ReviewQueueItem[] {
+		return [...items].sort((a, b) => {
+			let comparison = 0;
+			if (this.deckSortMode === "added") {
+				comparison = a.file.stat.ctime - b.file.stat.ctime;
+			} else if (this.deckSortMode === "interval") {
+				comparison = a.srs.interval - b.srs.interval;
+			} else {
+				comparison = a.srs.due.localeCompare(b.srs.due);
+			}
+
+			if (comparison !== 0) {
+				return this.sortDirection === "ascending" ? comparison : -comparison;
+			}
+
+			return a.file.path.localeCompare(b.file.path);
+		});
+	}
+
 	async render(): Promise<void> {
 		const container = this.contentEl;
 		container.empty();
@@ -113,6 +136,39 @@ class ReviewQueueView extends ItemView {
 		const refreshButton = toolbar.createEl("button", { text: "Refresh queue" });
 		refreshButton.addEventListener("click", async () => {
 			await this.plugin.refreshQueue();
+			await this.render();
+		});
+
+		const sortControl = toolbar.createEl("label", { cls: "simple-srs-sort-control" });
+		sortControl.createSpan({ text: "Sort by" });
+		const sortSelect = sortControl.createEl("select", {
+			attr: { "aria-label": "Sort deck notes" },
+		});
+		for (const [value, label] of [
+			["added", "Added date"],
+			["due", "Due date"],
+			["interval", "Interval"],
+		] as const) {
+			const option = sortSelect.createEl("option", { text: label, value });
+			option.selected = value === this.deckSortMode;
+		}
+		sortSelect.addEventListener("change", async () => {
+			this.deckSortMode = sortSelect.value as DeckSortMode;
+			await this.render();
+		});
+
+		const directionSelect = sortControl.createEl("select", {
+			attr: { "aria-label": "Sort direction" },
+		});
+		for (const direction of ["ascending", "descending"] as const) {
+			const option = directionSelect.createEl("option", {
+				text: direction === "ascending" ? "Ascending" : "Descending",
+				value: direction,
+			});
+			option.selected = direction === this.sortDirection;
+		}
+		directionSelect.addEventListener("change", async () => {
+			this.sortDirection = directionSelect.value as SortDirection;
 			await this.render();
 		});
 
@@ -149,7 +205,9 @@ class ReviewQueueView extends ItemView {
 			const mode = this.getDeckNoteMode(deck);
 			const queuedDeckItems = queuedItemsByDeck.get(deck) ?? [];
 			const reviewedDeckItems = reviewedItemsByDeck.get(deck) ?? [];
-			const deckItems = mode === "queued" ? queuedDeckItems : reviewedDeckItems;
+			const deckItems = this.sortDeckItems(
+				mode === "queued" ? queuedDeckItems : reviewedDeckItems,
+			);
 			const section = list.createEl("details", {
 				cls: "simple-srs-deck-section",
 			});
