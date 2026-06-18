@@ -210,7 +210,7 @@ var ReviewQueueView = class extends import_obsidian.ItemView {
         const card = deckList.createDiv({ cls: "simple-srs-card" });
         card.createDiv({ text: item.file.basename, cls: "simple-srs-card-title" });
         card.createDiv({
-          text: `${item.file.path} | due ${item.srs.due} | interval ${item.srs.interval}d`,
+          text: `${item.file.path} | added ${formatLocalDate(new Date(item.file.stat.ctime))} | due ${item.srs.due} | interval ${item.srs.interval}d`,
           cls: "simple-srs-card-meta"
         });
         const actions = card.createDiv({ cls: "simple-srs-actions" });
